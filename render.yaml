@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: portfolio-ai-backend
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    disk:
+      name: rag-disk
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: RAG_STORAGE_DIR
+        value: /var/data
+      - key: GITHUB_MODELS_ENDPOINT
+        value: https://models.github.ai/inference
+      - key: GITHUB_MODELS_CHAT_MODEL
+        value: gpt-4o
+      # Set these in Render Dashboard as secrets:
+      # - GITHUB_TOKEN
+      # - ADMIN_TOKEN
+      # Optional:
+      # - ALLOWED_ORIGINS (comma-separated)

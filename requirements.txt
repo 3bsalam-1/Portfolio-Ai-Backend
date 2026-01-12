@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+slowapi
+
+# PDF parsing
+pypdf
+
+# Lightweight retrieval (lexical BM25)
+rank-BM25
+numpy
+
+# GitHub Models client (Azure AI Inference SDK)
+azure-ai-inference
+azure-core
