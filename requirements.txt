@@ -5,7 +5,7 @@ python-dotenv
 slowapi
 
 # PDF parsing
-pypdf
+pdfplumber
 
 # Lightweight retrieval (lexical BM25)
 rank-BM25

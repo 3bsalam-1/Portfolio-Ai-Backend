@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
-from pypdf import PdfReader
+import pdfplumber
 from rank_bm25 import BM25Okapi
 
 
@@ -51,13 +51,13 @@ class RagIndex:
 
 
 def load_pdf_text(pdf_path: Path) -> str:
-    reader = PdfReader(str(pdf_path))
     parts: List[str] = []
-    for page in reader.pages:
-        txt = page.extract_text() or ""
-        txt = _normalize_text(txt)
-        if txt:
-            parts.append(txt)
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            txt = page.extract_text() or ""
+            txt = _normalize_text(txt)
+            if txt:
+                parts.append(txt)
     return "\n".join(parts).strip()
 
 
