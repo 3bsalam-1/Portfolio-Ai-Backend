@@ -1,4 +1,5 @@
 import hmac
+import json
 import os
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 from dotenv import load_dotenv
 
 from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -198,16 +199,36 @@ def _format_context(retrieved: List[Dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat")
 @limiter.limit("5/minute")
-async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request):
     # ip = request.client.host if request.client else "unknown" (Handled by slowapi)
-
 
     idx = _rag_index
     retrieved: List[Dict[str, Any]] = []
     if idx is not None:
-        hits = idx.retrieve(req.question, top_k=6)
+        # Cross-lingual bridge: BM25 is keyword-based. If the query is Arabic but documents are English,
+        # we append English keywords to help retrieval find the right chunks.
+        search_query = req.question
+        # Identify specific intent (Projects vs Experience)
+        is_project_query = any(kw in search_query for kw in ["مشروع", "مشاريع", "اعمال", "أعمال", "project"])
+        
+        arabic_keywords = [
+            "احمد", "أحمد", "محمد", "عبد السلام", "عبدالسلام",
+            "مشروع", "مشاريع", "اعمال", "أعمال",
+            "خبرة", "مهارات", "سيرة", "CV", "تعليم"
+        ]
+        
+        if any(kw in search_query for kw in arabic_keywords):
+            # If they ask for projects, we prioritize project keywords to avoid dilution
+            if is_project_query:
+                search_query += " Ahmed Mohamed Projects Featured"
+            else:
+                search_query += " Ahmed Mohamed Abdulsalam Experience Skills CV"
+            
+        # Increased top_k to 12 to ensure we don't miss chunks like "Project List" 
+        # which might rank lower than "Bio/Header" chunks.
+        hits = idx.retrieve(search_query, top_k=12)
         for chunk, _score in hits:
             retrieved.append(
                 {
@@ -218,10 +239,12 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             )
 
     system_prompt = (
-        "You are Ahmed Mohamed's portfolio assistant.\n"
-        "Answer questions about Ahmed using the provided DOCUMENT_CONTEXT.\n"
-        "If the answer is not in the context, say you don't have enough information from the documents.\n"
-        "Be concise and professional.\n"
+        "You are the personal portfolio assistant for Ahmed Mohamed Ahmed Abdulsalam (احمد محمد احمد عبد السلام).\n"
+        "The user may refer to him as Ahmed, Ahmed Mohamed, Ahmed Abdulsalam, or simply 'احمد'. All these refer to the portfolio owner.\n"
+        "Explain his projects, skills, and experience using the provided DOCUMENT_CONTEXT (mostly in English).\n"
+        "IMPORTANT: You MUST respond in the same language as the user's latest query. If they ask in Arabic, respond in Arabic using the English context as your source of truth.\n"
+        "If the information is not in the context, politely state that your knowledge is limited to the provided documents.\n"
+        "Be concise, professional, and helpful.\n"
         "\n"
         "DOCUMENT_CONTEXT:\n"
         f"{_format_context(retrieved)}"
@@ -242,12 +265,6 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
     messages.append(UserMessage(req.question))
 
-    try:
-        response = client.complete(messages=messages, model=GITHUB_MODELS_CHAT_MODEL)
-        answer = (response.choices[0].message.content or "").strip()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Upstream model error: {type(e).__name__}")
-
     citations = [
         Citation(
             source=item["source"],
@@ -257,6 +274,26 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         for item in retrieved[:4]
     ]
 
-    return ChatResponse(answer=answer, citations=citations)
+    async def event_generator():
+        # 1. Send citations first
+        yield f"data: {json.dumps({'type': 'citations', 'citations': [c.model_dump() for c in citations]}, ensure_ascii=False)}\n\n"
+
+        try:
+            # 2. Stream the response
+            response = client.complete(
+                messages=messages,
+                model=GITHUB_MODELS_CHAT_MODEL,
+                stream=True
+            )
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    yield f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
+            
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
