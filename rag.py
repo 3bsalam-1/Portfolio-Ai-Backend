@@ -1,9 +1,14 @@
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
+
+# Suppress noisy pdfminer font warnings
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+logging.getLogger("pdfminer").propagate = False
 
 import pdfplumber
 from rank_bm25 import BM25Okapi
